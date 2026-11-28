@@ -100,6 +100,9 @@ class ShiftlitAccessibilityService : AccessibilityService() {
         /** Spark's order detail after its payout was tapped. */
         private const val SPARK_PKG = "com.walmart.sparkdriver"
         private const val SPARK_OPEN_MS = 900L
+        /** Extra reads of a detail that hadn't drawn yet; then give up. */
+        private const val SPARK_READ_ATTEMPTS = 2
+        private const val SPARK_REREAD_MS = 1_200L
 
         /** Package name of the synthetic offer from the Assist screen. */
         private const val TEST_PKG = "app.shiftlit.test"
@@ -974,50 +977,125 @@ class ShiftlitAccessibilityService : AccessibilityService() {
      * a bad one is rejected.
      */
     private fun openThenDecline(scored: ScoredOffer, prefs: RulePrefs, onFailed: () -> Unit) {
-        val entry = scored.offer.payoutNode
+        val o = scored.offer
+        val entry = o.payoutNode
         if (entry == null) {
+            Diagnostics.note(
+                this, SPARK_PKG,
+                "spark open: card has no payout to tap — showing it instead",
+            )
             onFailed()
             return
         }
-        sparkOpenedPayout = scored.offer.payoutCents
+        sparkOpenedPayout = o.payoutCents
+        // Spark's list row is not the order: the detail the payout opens is.
+        // Every step of that hand-off goes into the trail, because a reject
+        // landing on the wrong amount is only explainable from what was
+        // tapped and what came back.
+        Diagnostics.note(
+            this, SPARK_PKG,
+            "spark open: tapping payout ${amountOf(o)} at ${boundsOf(entry.bounds)} " +
+                "(list row ${distanceOf(o)}, ${minutesOf(o)})",
+        )
         GesturePerformer.tap(this, entry.bounds) { ok ->
             if (!ok) {
                 sparkOpenedPayout = 0
+                Diagnostics.note(this, SPARK_PKG, "spark open: payout tap did not dispatch")
                 if (activeOffer === scored) onFailed()
                 return@tap
             }
-            handler.postDelayed(
-                {
-                    // Whatever the detail shows is the order that opened. Its
-                    // payout can differ from the row that was tapped — Spark
-                    // restamps the list from live data — so that detail is
-                    // scored on its own and acted on, rather than left on
-                    // screen untouched.
-                    var opened: DetectedOffer? = null
-                    for (read in liveReads(scored.offer.appPackage)) {
-                        val o = read.offer
-                        if (o != null) {
-                            opened = o
-                            break
-                        }
-                    }
-                    if (opened == null) return@postDelayed
-                    sparkOpenedPayout = opened.payoutCents
-                    val rescored = RuleEngine.score(opened, prefs)
-                    val node = opened.declineNode
-                    if (rescored.verdict == Verdict.BAD && node != null) {
-                        autoDecline(rescored, node)
-                        return@postDelayed
-                    }
-                    // Good, or nothing to tap: force a fresh score so this
-                    // detail gets its own card instead of sitting card-less.
-                    lastFingerprint = ""
-                    scan(SPARK_PKG, System.currentTimeMillis(), 0, ++scanToken)
-                },
-                SPARK_OPEN_MS,
+            Diagnostics.note(
+                this, SPARK_PKG,
+                "spark open: tap dispatched — reading the detail in ${SPARK_OPEN_MS}ms",
             )
+            readOpenedDetail(scored, prefs, onFailed, attempt = 0)
         }
     }
+
+    /**
+     * Read the detail an opened Spark order shows, then reject it if the rules
+     * fail. Spark restamps the list from live data, so the detail — not the row
+     * that was tapped — is what gets scored.
+     *
+     * A detail that hasn't drawn yet is re-read a bounded number of times. If
+     * it never parses, the open/refresh guards are released and the card is
+     * shown again: leaving them set is how an unreadable order sits on screen
+     * while nothing may be tapped.
+     */
+    private fun readOpenedDetail(
+        scored: ScoredOffer,
+        prefs: RulePrefs,
+        onFailed: () -> Unit,
+        attempt: Int,
+    ) {
+        handler.postDelayed(
+            {
+                val opened = liveReads(SPARK_PKG).firstNotNullOfOrNull { it.offer }
+                if (opened == null) {
+                    if (attempt < SPARK_READ_ATTEMPTS) {
+                        Diagnostics.note(
+                            this, SPARK_PKG,
+                            "spark open: detail not readable yet (read ${attempt + 1}) — re-reading",
+                        )
+                        readOpenedDetail(scored, prefs, onFailed, attempt + 1)
+                        return@postDelayed
+                    }
+                    sparkOpenedPayout = 0
+                    Diagnostics.note(
+                        this, SPARK_PKG,
+                        "spark open: no detail parsed after ${attempt + 1} reads — " +
+                            "releasing the open guard and showing the card again",
+                    )
+                    if (activeOffer === scored) onFailed()
+                    return@postDelayed
+                }
+                sparkOpenedPayout = opened.payoutCents
+                val rescored = RuleEngine.score(opened, prefs)
+                val node = opened.declineNode
+                Diagnostics.note(
+                    this, SPARK_PKG,
+                    "spark detail: ${amountOf(opened)}, ${distanceOf(opened)}, " +
+                        "${minutesOf(opened)} → ${rescored.verdict.name}, " +
+                        "reject=${node?.label ?: "none"}",
+                )
+                if (rescored.verdict == Verdict.BAD && node != null) {
+                    Diagnostics.note(
+                        this, SPARK_PKG,
+                        "spark detail: rejecting it — " + rescored.reasons.joinToString("; "),
+                    )
+                    autoDecline(rescored, node)
+                    return@postDelayed
+                }
+                Diagnostics.note(
+                    this, SPARK_PKG,
+                    if (node == null) "spark detail: kept — no reject control on the detail"
+                    else "spark detail: kept — rules pass",
+                )
+                // Good, or nothing to tap: force a fresh score so this detail
+                // gets its own card instead of sitting card-less.
+                lastFingerprint = ""
+                scan(SPARK_PKG, System.currentTimeMillis(), 0, ++scanToken)
+            },
+            if (attempt == 0) SPARK_OPEN_MS else SPARK_REREAD_MS,
+        )
+    }
+
+    /** Amount as the card shows it, for a Diagnostics line. */
+    private fun amountOf(o: DetectedOffer): String =
+        Currencies.format(o.payoutCents, o.currencySymbol, o.currencyCode)
+
+    private fun boundsOf(b: Bounds): String = "${b.left},${b.top},${b.right},${b.bottom}"
+
+    /** Distance in the driver's own unit — Diagnostics must not mix them. */
+    private fun distanceOf(o: DetectedOffer): String {
+        val km = o.distanceKm ?: return "no distance"
+        val isKm = settings.distanceUnit == "KM"
+        val v = if (isKm) km else km / 1.609344
+        return "%.1f".format(v) + if (isKm) " km" else " mi"
+    }
+
+    private fun minutesOf(o: DetectedOffer): String =
+        o.durationMin?.let { "%.0f min".format(it) } ?: "no duration"
 
     /** Tick the overlay countdown down, then tap accept at 0. */
     private fun scheduleAutoAccept(scored: ScoredOffer, node: NodeRef, delaySec: Int) {
