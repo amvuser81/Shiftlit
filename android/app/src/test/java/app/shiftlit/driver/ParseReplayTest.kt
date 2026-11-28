@@ -752,6 +752,50 @@ class ParseReplayTest {
     }
 
     @Test
+    fun sparksUnavailableDialogIsDismissedNotDeclined() {
+        // Seen live after an order expired: a modal over the list whose only
+        // control is GOT IT. It has to be cleared, or nothing behind it can be
+        // seen or declined. It must never be treated as a refusal.
+        val gotIt = OfferParser.FlatNode(
+            "GOT IT", "com.walmart.sparkdriver:id/ack", Bounds(60, 1900, 1020, 2040), true,
+        )
+        val dialog = listOf(
+            OfferParser.FlatNode("Offer unavailable", null, Bounds(60, 1200, 800, 1300), false),
+            OfferParser.FlatNode(
+                "This offer is no longer available because it either expired, got " +
+                    "accepted by another driver, or the order(s) changed.",
+                null, Bounds(60, 1350, 1000, 1600), false,
+            ),
+            gotIt,
+        )
+        assertEquals(
+            gotIt.bounds,
+            OfferParser.unavailableDismissTarget("com.walmart.sparkdriver", dialog),
+        )
+        assertNull(
+            "only Spark's dialog is handled",
+            OfferParser.unavailableDismissTarget("com.ubercab.driver", dialog),
+        )
+        assertNull(
+            "an ordinary list is not dismissed",
+            OfferParser.unavailableDismissTarget(
+                "com.walmart.sparkdriver",
+                listOf(
+                    OfferParser.FlatNode("Offers", null, Bounds(0, 400, 300, 450), false),
+                    gotIt,
+                ),
+            ),
+        )
+        assertNull(
+            "the dialog copy without its control is not tapped",
+            OfferParser.unavailableDismissTarget(
+                "com.walmart.sparkdriver",
+                dialog.dropLast(1),
+            ),
+        )
+    }
+
+    @Test
     fun sparksOfferListRefreshIsMatchedByItsViewId() {
         val action = OfferParser.FlatNode(
             "",

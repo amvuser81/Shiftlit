@@ -30,6 +30,7 @@ class ShiftlitAccessibilityService : AccessibilityService() {
     private var lastScanAt = 0L
     private var lastRadarTapAt = 0L
     private var lastStalledTapAt = 0L
+    private var lastUnavailableTapAt = 0L
 
     /** Payout of the Spark order whose card was opened for a reject — 0 when
      *  none. A scan of the opened detail must reject, not open it again. */
@@ -96,6 +97,9 @@ class ShiftlitAccessibilityService : AccessibilityService() {
         /** Don't tap a stalled list's refresh on every scan while its snackbar
          *  lingers; a reload needs a moment to produce cards. */
         private const val STALLED_REFRESH_MS = 4_000L
+
+        /** The dead-offer dialog lingers while its tap is dispensed. */
+        private const val UNAVAILABLE_RETRY_MS = 3_000L
 
         /** Spark's order detail after its payout was tapped. */
         private const val SPARK_PKG = "com.walmart.sparkdriver"
@@ -622,6 +626,33 @@ class ShiftlitAccessibilityService : AccessibilityService() {
         val hasMoney = nodes.any {
             OfferParser.moneyOf(it.text, extraRe, curSymbol) != null
         }
+        // Spark's "Offer unavailable" dialog sits over the list when the order
+        // expired or another driver took it, and everything behind it is dead.
+        // Acknowledge it — that is not a decline, the order is already gone —
+        // and rescan, so the next real offer can be acted on.
+        if (prefs.autoDecline && pkg == SPARK_PKG &&
+            now - lastUnavailableTapAt > UNAVAILABLE_RETRY_MS &&
+            OfferParser.unavailableDismissTarget(pkg, nodes) != null
+        ) {
+            val ack = freshTapTarget(pkg) { OfferParser.unavailableDismissTarget(pkg, it) }
+            if (ack != null) {
+                lastUnavailableTapAt = now
+                Diagnostics.record(this, pkg, "idle", nodes, decision)
+                Diagnostics.note(
+                    this, pkg,
+                    "offer unavailable → dismissing the dead card (no decline)",
+                )
+                offerGone() // the order it described is gone
+                GesturePerformer.tap(this, ack) { ok ->
+                    if (ok) handler.postDelayed(
+                        { scan(pkg, System.currentTimeMillis(), 0, ++scanToken) },
+                        600,
+                    )
+                }
+                return
+            }
+        }
+
         // Spark overlays its offer list with a refresh action — often while
         // orders are still on it — and nothing can be declined until it is
         // tapped. Do this before scoring: acting on the rows behind it is how

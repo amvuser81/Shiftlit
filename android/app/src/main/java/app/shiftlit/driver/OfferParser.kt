@@ -182,6 +182,11 @@ object OfferParser {
             """request (?:is )?(?:unavailable|expired)|offer (?:is )?(?:expired|no longer available)""",
         RegexOption.IGNORE_CASE,
     )
+    /** The single acknowledgement on a dead offer's dialog. */
+    private val UNAVAILABLE_DISMISS = Regex(
+        """^(got it|ok|okay|dismiss|close|thanks?)$""",
+        RegexOption.IGNORE_CASE,
+    )
 
     // A day's-work summary — earnings, wallet, balance — carries money and a
     // length of time, and used to score as an offer: "new offer $94" for the
@@ -518,6 +523,33 @@ object OfferParser {
      * the id is the match. Tapping it only reloads the list; it never accepts
      * or declines.
      */
+    /**
+     * The acknowledgement on Spark's "Offer unavailable" dialog.
+     *
+     * Spark leaves that dialog over the offer list when an order expires or
+     * another driver takes it: "This offer is no longer available because it
+     * either expired, got accepted by another driver, or the order(s)
+     * changed." It blocks the list and every control behind it until it is
+     * dismissed, so nothing else can be seen or declined. Dismissing it is
+     * not a refusal — the order is already gone — and the only control it
+     * offers is that acknowledgement.
+     */
+    fun unavailableDismissTarget(pkg: String, nodes: List<FlatNode>): Bounds? {
+        if (pkg != SPARK_PKG) return null
+        val dead = nodes.any {
+            it.text.contains("offer unavailable", ignoreCase = true) ||
+                UNAVAILABLE.containsMatchIn(it.text)
+        }
+        if (!dead) return null
+        // The label's own bounds are inside the button, so tapping them works
+        // whether or not the button node itself carries the text.
+        return nodes
+            .firstOrNull {
+                UNAVAILABLE_DISMISS.matches(it.text.trim()) &&
+                    it.bounds.width() > 0 && it.bounds.height() > 0
+            }?.bounds
+    }
+
     fun stalledListAction(pkg: String, nodes: List<FlatNode>): Bounds? {
         if (pkg != SPARK_PKG) return null
         return nodes.firstOrNull { n ->
