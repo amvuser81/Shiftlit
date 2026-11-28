@@ -369,6 +369,44 @@ class ParseReplayTest {
     }
 
     @Test
+    fun sparksOfferSheetIsACardEvenWithItsEarningsTabAndRefreshBar() {
+        // The live Spark home: an offers sheet over the map, the app's own
+        // "Earnings" label in the tree, a refresh snackbar, and a countdown on
+        // the card. This was rejected as an earnings summary, so no Spark
+        // order was ever scored and its payout was never tapped.
+        val trail = ArrayList<String>()
+        val offer = OfferParser.parse(
+            "com.walmart.sparkdriver",
+            listOf(
+                OfferParser.FlatNode("Earnings", null, Bounds(40, 40, 300, 90), false),
+                OfferParser.FlatNode("Offers", null, Bounds(40, 400, 300, 450), false),
+                OfferParser.FlatNode("until 1:00 PM", null, Bounds(40, 480, 500, 540), false),
+                OfferParser.FlatNode("Just for you", null, Bounds(60, 600, 500, 660), false),
+                OfferParser.FlatNode("0:28", null, Bounds(860, 600, 980, 680), false),
+                OfferParser.FlatNode("$53.53", null, Bounds(60, 700, 500, 820), false),
+                OfferParser.FlatNode("21 stops • 49.9 miles • 2 hrs, 19 min", null, Bounds(60, 900, 1000, 960), false),
+                OfferParser.FlatNode("Reject", "com.walmart.sparkdriver:id/reject", Bounds(60, 1700, 1020, 1860), true),
+                OfferParser.FlatNode("You have new offer(s) available.", null, Bounds(0, 2200, 700, 2280), false),
+            ),
+            trace = trail,
+        )
+        assertNotNull("a live countdown and a Reject control make this a card: $trail", offer)
+        assertEquals(5353, offer!!.payoutCents)
+        assertEquals(80.3, offer.distanceKm!!, 0.05)
+        assertEquals(139.0, offer.durationMin!!, 0.1)
+        assertEquals("Reject", offer.declineNode?.label)
+        assertEquals(
+            "the payout is the entry point that opens the order",
+            Bounds(60, 700, 500, 820),
+            offer.payoutNode?.bounds,
+        )
+        assertFalse(
+            "no summary rejection survived",
+            trail.any { it.contains("summary screen") },
+        )
+    }
+
+    @Test
     fun anEarningsScreenIsNotAnOffer() {
         // "New offer $94": the day's total and "h online" sit above a trip
         // list, and every one of those figures is plausible on its own.

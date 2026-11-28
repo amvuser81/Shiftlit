@@ -384,6 +384,14 @@ object OfferParser {
         extra: Regex?,
         extraSymbol: String,
     ): Boolean {
+        // A live card outranks the summary heuristic. An order countdown or an
+        // explicit reject control means this is an offer (or the offer list
+        // holding one), even when the app's nav names "Earnings" or a sheet of
+        // orders carries several distances. Earnings and wallet screens carry
+        // neither, so they stay guarded.
+        if (nodes.any { EXPIRY.containsMatchIn(it.text.trim()) } ||
+            nodes.any { PRIMARY_DECLINE.containsMatchIn(it.text) }
+        ) return false
         var distanceish = 0
         var money = 0
         for (n in nodes) {
