@@ -786,13 +786,20 @@ class ShiftlitAccessibilityService : AccessibilityService() {
                 (settings.autoAcceptReservations || !offer.isReservation))
                 settings.autoAcceptDelaySec else 0
 
+        // Spark's list row often has no reject of its own — the order has to
+        // be opened from its payout first. Treat that payout as the decline
+        // entry point so a bad Spark order is still acted on.
+        val sparkOpenable = pkg == SPARK_PKG && offer.payoutNode != null &&
+            sparkOpenedPayout != offer.payoutCents
+
         // Auto-decline taps before the driver could read a card, so a SKIP IT
         // scorecard would only land over the next screen. GOOD offers always
         // keep their card: auto-accept counts down on it, and with automation
-        // off it is the only feedback. Without a tappable decline control the
-        // card still shows — nothing else would tell the driver why it failed.
+        // off it is the only feedback. Without any way to refuse — no control
+        // and, for Spark, no payout to open — the card still shows; nothing
+        // else would tell the driver why it failed.
         val autoDeclineNow = prefs.autoDecline && scored.verdict == Verdict.BAD &&
-            automationTrusted && offer.declineNode != null
+            automationTrusted && (offer.declineNode != null || sparkOpenable)
 
         /** Draw the read-only scorecard and arm its optional timeout. */
         fun showScorecard() {
@@ -835,7 +842,7 @@ class ShiftlitAccessibilityService : AccessibilityService() {
         if (autoAcceptDelay > 0) {
             scheduleAutoAccept(scored, offer.acceptNode!!, autoAcceptDelay)
         } else if (autoDeclineNow) {
-            if (pkg == SPARK_PKG && sparkOpenedPayout != offer.payoutCents) {
+            if (sparkOpenable) {
                 openThenDecline(scored, prefs) { showScorecard() }
             } else {
                 offer.declineNode?.let { autoDecline(scored, it) { showScorecard() } }
