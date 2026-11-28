@@ -903,7 +903,20 @@ class ShiftlitAccessibilityService : AccessibilityService() {
         if (declineRetried) return
         val r = Runnable {
             if (activeOffer !== scored) return@Runnable
-            val next = freshDeclineTarget(scored.offer.appPackage, key, tried) ?: return@Runnable
+            val next = freshDeclineTarget(scored.offer.appPackage, key, tried)
+            if (next == null) {
+                if (scored.offer.appPackage == SPARK_PKG) Diagnostics.note(
+                    this, SPARK_PKG,
+                    "spark reject: no second control ${DECLINE_RETRY_MS}ms after " +
+                        "'${scored.offer.declineNode?.label ?: "Reject"}' — order gone or " +
+                        "the confirm sheet wasn't read",
+                )
+                return@Runnable
+            }
+            if (scored.offer.appPackage == SPARK_PKG) Diagnostics.note(
+                this, SPARK_PKG,
+                "spark reject: tapping '${next.label}' on the confirm step",
+            )
             declineRetried = true
             autoDecline(scored, next)
         }
@@ -955,17 +968,20 @@ class ShiftlitAccessibilityService : AccessibilityService() {
     private fun freshDeclineTarget(pkg: String, fingerprint: String, tried: Bounds): NodeRef? {
         for (read in liveReads(pkg)) {
             val offer = read.offer
+            if (offer != null && offer.fingerprint != fingerprint) continue
+            // A card whose only control is the one already tapped must not end
+            // the search: Spark's confirm sheet can arrive in the same tree
+            // (or the same window list) as the card behind it, and the sheet's
+            // "Reject Offer" is the step that actually refuses the order.
             if (offer != null) {
-                if (offer.fingerprint != fingerprint) continue
                 val candidates = offer.declineNodes.ifEmpty { listOfNotNull(offer.declineNode) }
-                return candidates.firstOrNull { it.bounds != tried }
+                candidates.firstOrNull { it.bounds != tried }?.let { return it }
             }
-            // No card parses here: this is the second step of a two-tap
-            // decline ("Reject" → "Reject Offer"), which covers the card and
-            // shows no distance or duration. Only explicit refusal wording is
-            // tapped, never a generic close and never the control already
-            // tried.
-            return OfferParser.confirmDeclineTarget(read.nodes)?.takeIf { it.bounds != tried }
+            // Only explicit refusal wording is tapped here — never a generic
+            // close — and never the control already tried.
+            OfferParser.confirmDeclineTargets(read.nodes)
+                .firstOrNull { it.bounds != tried }
+                ?.let { return it }
         }
         return null
     }

@@ -490,14 +490,21 @@ object OfferParser {
      * is what the driver must never have chosen for them.
      */
     fun confirmDeclineTarget(nodes: List<FlatNode>): NodeRef? =
+        confirmDeclineTargets(nodes).firstOrNull()
+
+    /**
+     * Every explicit refusal on a screen that carries a confirm sheet. The
+     * card behind the sheet can still be in the same tree, so its Reject is in
+     * this list too — the caller picks the first one it hasn't already tried.
+     */
+    fun confirmDeclineTargets(nodes: List<FlatNode>): List<NodeRef> =
         nodes
             .filter { it.text.isNotBlank() && PRIMARY_DECLINE.containsMatchIn(it.text) }
             .sortedWith(
                 compareByDescending<FlatNode> { it.clickable }
                     .thenByDescending { it.bounds.width().toLong() * it.bounds.height().toLong() },
             )
-            .firstOrNull()
-            ?.let { NodeRef(it.bounds, it.text, it.clickable) }
+            .map { NodeRef(it.bounds, it.text, it.clickable) }
 
     /**
      * The refresh action Spark puts over its offer list.

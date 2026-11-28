@@ -732,6 +732,26 @@ class ParseReplayTest {
     }
 
     @Test
+    fun sparksConfirmSheetIsReachableWithTheCardStillBehindIt() {
+        // The confirm sheet can arrive in the same tree as the card that opened
+        // it. The card's own REJECT is already tapped, so the retry must find
+        // the sheet's REJECT OFFER instead of giving up on the tried control.
+        val cardReject = OfferParser.FlatNode(
+            "REJECT", "com.walmart.sparkdriver:id/reject", Bounds(60, 1700, 480, 1860), true,
+        )
+        val confirm = OfferParser.FlatNode(
+            "REJECT OFFER", "com.walmart.sparkdriver:id/reject_offer", Bounds(60, 1660, 1020, 1800), true,
+        )
+        val targets = OfferParser.confirmDeclineTargets(listOf(cardReject, confirm))
+        assertEquals("both refusals are listed", 2, targets.size)
+        assertEquals(
+            "the untried control is the confirm sheet",
+            "REJECT OFFER",
+            targets.first { it.bounds != cardReject.bounds }.label,
+        )
+    }
+
+    @Test
     fun sparksOfferListRefreshIsMatchedByItsViewId() {
         val action = OfferParser.FlatNode(
             "",
