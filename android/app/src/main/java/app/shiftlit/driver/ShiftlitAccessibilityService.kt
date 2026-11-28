@@ -1021,11 +1021,18 @@ class ShiftlitAccessibilityService : AccessibilityService() {
                 val candidates = offer.declineNodes.ifEmpty { listOfNotNull(offer.declineNode) }
                 candidates.firstOrNull { it.bounds != tried }?.let { return it }
             }
-            // Only explicit refusal wording is tapped here — never a generic
-            // close — and never the control already tried.
-            OfferParser.confirmDeclineTargets(read.nodes)
-                .firstOrNull { it.bounds != tried }
-                ?.let { return it }
+            // Spark's second "no" is only pressed when its confirmation
+            // dialog is actually up — its own question is the proof. Once it
+            // is, the untried explicit refusal on that sheet is the control.
+            if (pkg == SPARK_PKG) {
+                OfferParser.confirmDeclineSheet(read.nodes)
+                    ?.takeIf { it.bounds != tried }
+                    ?.let { return it }
+            } else {
+                OfferParser.confirmDeclineTargets(read.nodes)
+                    .firstOrNull { it.bounds != tried }
+                    ?.let { return it }
+            }
         }
         return null
     }
@@ -1106,12 +1113,19 @@ class ShiftlitAccessibilityService : AccessibilityService() {
     ) {
         handler.postDelayed(
             {
-                val opened = liveReads(SPARK_PKG).firstNotNullOfOrNull { it.offer }
+                // Only a verified order detail may be rejected. Parsing alone
+                // is not proof: the list row carries the same figures, and a
+                // reject tapped there can sit below the fold.
+                val reads = liveReads(SPARK_PKG)
+                val verified = reads.firstOrNull {
+                    it.offer != null && OfferParser.isOrderDetail(it.nodes)
+                }
+                val opened = verified?.offer
                 if (opened == null) {
                     if (attempt < SPARK_READ_ATTEMPTS) {
                         Diagnostics.note(
                             this, SPARK_PKG,
-                            "spark open: detail not readable yet (read ${attempt + 1}) — re-reading",
+                            "spark open: order detail not up yet (read ${attempt + 1}) — re-reading",
                         )
                         readOpenedDetail(scored, prefs, onFailed, attempt + 1)
                         return@postDelayed
@@ -1119,8 +1133,8 @@ class ShiftlitAccessibilityService : AccessibilityService() {
                     sparkOpenedPayout = 0
                     Diagnostics.note(
                         this, SPARK_PKG,
-                        "spark open: no detail parsed after ${attempt + 1} reads — " +
-                            "releasing the open guard and showing the card again",
+                        "spark open: no verified detail after ${attempt + 1} reads — " +
+                            "not tapping Reject, releasing the open guard and showing the card",
                     )
                     if (activeOffer === scored) onFailed()
                     return@postDelayed

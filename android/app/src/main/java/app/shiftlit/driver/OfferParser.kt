@@ -497,6 +497,50 @@ object OfferParser {
     fun confirmDeclineTarget(nodes: List<FlatNode>): NodeRef? =
         confirmDeclineTargets(nodes).firstOrNull()
 
+    /** Copy that only Spark's opened order detail carries — not its list row. */
+    private val DETAIL_COPY = Regex(
+        """estimated total|trip highlights|offer details|base pay|""" +
+            """customers can adjust tips""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * Whether this tree is the order detail that a payout tap opens.
+     *
+     * Spark's list row and its detail both show a payout, a distance and a
+     * duration, so a reject tapped on the wrong one is how automation ended up
+     * hitting a control that was still below the fold. The detail's own copy —
+     * "Estimated total", "Trip highlights" — is what tells them apart.
+     */
+    fun isOrderDetail(nodes: List<FlatNode>): Boolean =
+        nodes.any { n -> DETAIL_COPY.containsMatchIn(n.text) } &&
+            nodes.any { n -> PRIMARY_DECLINE.containsMatchIn(n.text) }
+
+    /**
+     * The "Reject Offer" button, only when the confirmation dialog it belongs
+     * to is on screen. Without the dialog's own question, a label on some
+     * other screen is not a control this may press.
+     */
+    fun confirmDeclineSheet(nodes: List<FlatNode>): NodeRef? {
+        val asked = nodes.any { n ->
+            n.text.contains("are you sure", ignoreCase = true) ||
+                n.text.contains("once you reject", ignoreCase = true) ||
+                n.text.contains("go back and accept", ignoreCase = true)
+        }
+        if (!asked) return null
+        return nodes
+            .filter {
+                it.text.isNotBlank() && PRIMARY_DECLINE.containsMatchIn(it.text) &&
+                    it.bounds.width() > 0 && it.bounds.height() > 0
+            }
+            .sortedWith(
+                compareByDescending<FlatNode> { it.clickable }
+                    .thenByDescending { it.bounds.width().toLong() * it.bounds.height().toLong() },
+            )
+            .firstOrNull()
+            ?.let { NodeRef(it.bounds, it.text, it.clickable) }
+    }
+
     /**
      * Every explicit refusal on a screen that carries a confirm sheet. The
      * card behind the sheet can still be in the same tree, so its Reject is in

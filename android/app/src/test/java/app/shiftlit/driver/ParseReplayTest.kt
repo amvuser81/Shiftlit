@@ -752,6 +752,46 @@ class ParseReplayTest {
     }
 
     @Test
+    fun sparkDetailMustBeUpBeforeRejectIsTapped() {
+        // The list row and the detail share the payout, distance, duration and
+        // a REJECT label. Only the detail's copy proves the second screen is
+        // actually pulled up.
+        val row = listOf(
+            OfferParser.FlatNode("$27.04", null, Bounds(60, 700, 500, 820), false),
+            OfferParser.FlatNode("3 stops • 15.7 miles • 1 hr, 8 mins", null, Bounds(60, 900, 1000, 960), false),
+            OfferParser.FlatNode("REJECT", null, Bounds(60, 2300, 480, 2380), true),
+        )
+        assertFalse("a list row is not the detail", OfferParser.isOrderDetail(row))
+        assertTrue(
+            "the detail's own copy verifies it",
+            OfferParser.isOrderDetail(row + OfferParser.FlatNode("Estimated total", null, Bounds(60, 1100, 600, 1160), false)),
+        )
+    }
+
+    @Test
+    fun sparkConfirmIsOnlyPressedWhenItsDialogIsUp() {
+        val confirm = OfferParser.FlatNode(
+            "REJECT OFFER", "com.walmart.sparkdriver:id/reject_offer", Bounds(60, 1660, 1020, 1800), true,
+        )
+        assertNull(
+            "a lone label is not a confirm sheet",
+            OfferParser.confirmDeclineSheet(listOf(confirm)),
+        )
+        assertEquals(
+            confirm.bounds,
+            OfferParser.confirmDeclineSheet(
+                listOf(
+                    OfferParser.FlatNode(
+                        "Are you sure you want to reject this offer?",
+                        null, Bounds(60, 1200, 1000, 1400), false,
+                    ),
+                    confirm,
+                ),
+            )?.bounds,
+        )
+    }
+
+    @Test
     fun sparksUnavailableDialogIsDismissedNotDeclined() {
         // Seen live after an order expired: a modal over the list whose only
         // control is GOT IT. It has to be cleared, or nothing behind it can be
