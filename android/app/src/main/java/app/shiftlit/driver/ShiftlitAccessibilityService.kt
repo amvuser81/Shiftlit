@@ -407,7 +407,11 @@ class ShiftlitAccessibilityService : AccessibilityService() {
             }
             // flatten() recycles the root itself.
             val target = find(OfferParser.flatten(root))
-            if (target != null) return target
+            // Off-screen controls are not tappable at all: their center is in
+            // the system bars, so dispatching there opens Recents/Home.
+            if (target != null &&
+                GesturePerformer.onScreen(this, target.centerX(), target.centerY())
+            ) return target
         }
         return null
     }
@@ -913,6 +917,15 @@ class ShiftlitAccessibilityService : AccessibilityService() {
          *  sit there with no verdict. A retry keeps whatever is on screen. */
         onFailed: (() -> Unit)? = null,
     ) {
+        if (!GesturePerformer.onScreen(this, node.bounds.centerX(), node.bounds.centerY())) {
+            Diagnostics.note(
+                this, scored.offer.appPackage,
+                "'${node.label}' at ${boundsOf(node.bounds)} is off screen — not tapping " +
+                    "(that would hit the nav bar)",
+            )
+            if (activeOffer === scored) onFailed?.invoke()
+            return
+        }
         GesturePerformer.tap(this, node.bounds) { ok ->
             if (!ok) {
                 if (activeOffer === scored) onFailed?.invoke()
@@ -1037,6 +1050,15 @@ class ShiftlitAccessibilityService : AccessibilityService() {
             Diagnostics.note(
                 this, SPARK_PKG,
                 "spark open: card has no payout to tap — showing it instead",
+            )
+            onFailed()
+            return
+        }
+        if (!GesturePerformer.onScreen(this, entry.bounds.centerX(), entry.bounds.centerY())) {
+            Diagnostics.note(
+                this, SPARK_PKG,
+                "spark open: payout at ${boundsOf(entry.bounds)} is off screen — " +
+                    "not tapping, showing the card instead",
             )
             onFailed()
             return

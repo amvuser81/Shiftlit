@@ -7,7 +7,25 @@ import android.graphics.Path
 /** Performs taps inside the target app via the accessibility gesture API. */
 object GesturePerformer {
 
+    /**
+     * True when the point is clear of the status bar and the navigation /
+     * gesture area. A control laid out off screen (Spark's list card extends
+     * below the fold) would otherwise be "tapped" at the screen edge, which
+     * lands on Recents or Home and yanks the driver out of the app.
+     */
+    fun onScreen(service: AccessibilityService, x: Int, y: Int): Boolean {
+        val dm = service.resources.displayMetrics
+        val insetTop = (24 * dm.density).toInt()
+        val insetBottom = (64 * dm.density).toInt()
+        return x in 0 until dm.widthPixels &&
+            y in insetTop until (dm.heightPixels - insetBottom)
+    }
+
     fun tap(service: AccessibilityService, bounds: Bounds, done: (Boolean) -> Unit = {}) {
+        if (!onScreen(service, bounds.centerX(), bounds.centerY())) {
+            done(false)
+            return
+        }
         val path = Path().apply {
             moveTo(bounds.centerX().toFloat(), bounds.centerY().toFloat())
         }
